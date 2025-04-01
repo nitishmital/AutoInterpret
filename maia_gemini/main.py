@@ -29,7 +29,7 @@ def call_argparse():
     parser.add_argument('--maia', type=str, default='gemini-1.5-flash', choices=['gpt-4-vision-preview','gpt-4-turbo','gemini-1.5-flash'], help='maia agent name')
     parser.add_argument('--task', type=str, default='neuron_description', choices=['neuron_description'], help='task to solve, default is neuron description') #TODO: add other tasks
     parser.add_argument('--model', type=str, default='resnet152', choices=['resnet152','clip-RN50','dino_vits8','synthetic_neurons'], help='model to interp') #TODO: add synthetic neurons
-    parser.add_argument('--units', type=str2dict, default='layer4=100', help='units to interp')
+    parser.add_argument('--units', type=str2dict, default='layer2=1', help='units to interp')
     parser.add_argument('--unit_mode', type=str, default='manual', choices=['from_file','random','manual'], help='units to interp')	
     parser.add_argument('--unit_file_path', type=str, default='./neuron_indices/', help='units to interp')	
     parser.add_argument('--num_of_units', type=int, default=10, help='units to interp (if mode "unit_mode" is set to "random")')	
@@ -39,6 +39,7 @@ def call_argparse():
     parser.add_argument('--path2exemplars', type=str, default='./exemplars/', help='path to net disect top 15 exemplars images')	
     parser.add_argument('--device', type=int, default=0, help='gpu decvice to use (e.g. 1)')	
     parser.add_argument('--text2image', type=str, default='sd', choices=['sd','dalle'], help='name of text2image model')
+    parser.add_argument('--sae_bool', type=bool, default=True, help='include SAE in pipeline')
     args = parser.parse_args()
     return args
 
@@ -185,7 +186,7 @@ def main(args):
             with open(os.path.join('./synthetic-neurons-dataset/labels/',f'{layer}.json'), 'r') as file: # load the synthetic neuron labels
                 synthetic_neuron_data = json.load(file)
         else:
-            net_dissect = DatasetExemplars(args.path2exemplars, args.path2save, args.model, layer, units) # precomputes dataset examplars for tools.dataset_exemplars
+            net_dissect = DatasetExemplars(args.path2exemplars, args.path2save, args.model, layer, units, sae_bool=args.sae_bool, device=args.device) # precomputes dataset examplars for tools.dataset_exemplars
         for unit in units: 
             print(layer,unit)
             path2save = os.path.join(args.path2save,args.maia,args.model,str(layer),str(unit))
@@ -197,7 +198,7 @@ def main(args):
                 system = Synthetic_System(unit, gt_label, layer, args.device)
                 tools = Tools(path2save, args.device, net_dissect, text2image_model_name=args.text2image, images_per_prompt=1) # initialize the tools class
             else:
-                system = System(unit, layer, args.model, args.device, net_dissect.thresholds) # initialize the system class
+                system = System(unit, layer, args.model, args.device, net_dissect.thresholds, args.sae_bool) # initialize the system class
                 tools = Tools(path2save, args.device, net_dissect, text2image_model_name=args.text2image) # initialize the tools class
             tools.update_experiment_log(role='system', type="text", type_content=maia_api) # update the experiment log with the system prompt
             tools.update_experiment_log(role='user', type="text", type_content=user_query) # update the experiment log with the user prompt
@@ -215,7 +216,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = call_argparse()
-    device = torch.device('mps') #torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device('cuda') #torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
     main(args)
 
 

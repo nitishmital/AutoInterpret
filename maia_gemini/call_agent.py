@@ -9,7 +9,7 @@ from IPython import embed
 import time
 from random import random, uniform
 import warnings
-from vertexai.preview.generative_models import Part, Content
+
 import os
 import requests
 import ast
@@ -65,14 +65,14 @@ def ask_agent(model, history):
                         im = PIL.Image.open(BytesIO(decoded_bytes))
                         prompt += [im]
                 #text = 'System: ' + history[0]['content'][0]['text'] + ", Assistant: Understood, User: " + history[1]['content'][0]['text']
-            model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
-            response = model.generate_content(prompt)
+            model_obj = genai.GenerativeModel(model_name="models/"+model)
+            response = model_obj.generate_content(prompt)
             resp = response.text #r['choices'][0]['message']['content']
         else:
             print(f"Unrecognize model name: {model}")
             return 0
     except Exception as e:
-        print('openai-api error: ',e)
+        print('api error: ',e)
         if ((e.http_status==429) or (e.http_status==502) or (e.http_status==500)) :
             time.sleep(60+10*random()) # wait for 60 seconds and try again
             if count < 25:
