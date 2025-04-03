@@ -1,8 +1,5 @@
 import torch
 from torchvision import transforms, models
-
-# from PyUnity.ultralytics.ultralytics import YOLO
-
 from train_main import sae_trainer as trainer
 
 

@@ -11,7 +11,7 @@ import scipy
 import matplotlib.pyplot as plt
 
 import numpy as np
-from sae import SparseAutoencoder, SparseAutoencoder2, SparseAutoencoder3, SparseAutoencoder4, SparseAutoencoder5, SparseAutoencoder7, SparseAutoencoder8, SparseAutoencoder9
+from sae import SparseAutoencoder, SparseAutoencoder2, SparseAutoencoder3, SparseAutoencoder4, SparseAutoencoder5, SparseAutoencoder6, SparseAutoencoder7, SparseAutoencoder8, SparseAutoencoder9
 import cv2
 import matplotlib.patches as patches
 import pickle
@@ -28,6 +28,7 @@ import random
 from matplotlib.colors import Normalize
 
 seed = 12  # 124
+np.manual_seed(seed)
 torch.manual_seed(seed)
 
 def save_checkpoint(state, filename="my_checkpoint.pth"):
@@ -47,10 +48,10 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
         self.device = device
         self.data_path = data_path
         self.val_dataset, self.val_loader = self.get_dataloader(data_path, mode="test")  
-        self.layer = 1
+        self.layer = 3
         self.num_models = 1  # size of ensemble of models
-        self.sae = SparseAutoencoder4(input_channels=512).to(self.device)  # resnet152 layer2: 512, layer3: 1024, layer: 2048
-        self.optim_sae = torch.optim.SGD(self.sae.parameters(), lr=5e-3)
+        self.sae = SparseAutoencoder9(input_channels=1024).to(self.device)  # resnet152 layer2: 512, layer3: 1024, layer: 2048
+        self.optim_sae = torch.optim.SGD(self.sae.parameters(), lr=1e-2)
         self.epochs = 100
         self.model = model
         self.models = [model]  # Store model in list for compatibility with existing code
@@ -76,8 +77,14 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
 
         os.makedirs("/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models", exist_ok=True)
         
-        self.SAVE_SAE_MODEL_FILE = "/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer2][2]"
-        
+        self.SAVE_SAE_MODEL_FILE = f"/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer={self.layer}][9][k_sparse]"
+        self.folder_id = 0
+        while True:
+            if os.path.isdir(f"results/activations/exp_{self.folder_id}"):
+                self.folder_id = self.folder_id + 1
+            else:
+                os.makedirs(f"results/activations/exp_{self.folder_id}", exist_ok=True)
+                break 
         self.model.to(self.device)
         '''if LOAD_MODEL:
             load_checkpoint(torch.load(self.LOAD_SAE_MODEL_FILE+f".pth", map_location=torch.device('cpu')), self.sae)
@@ -87,33 +94,40 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
 
     def visualize_activations(self, features, sparse_features, input_image, epoch):
         # Create directory for saving visualizations
-        os.makedirs("results/activations", exist_ok=True)
-        
-        # Process input image (taking second image from batch instead of first)
-        img = input_image[1, 0, :, :].cpu().detach().numpy()  # Changed index from 0 to 1
-        
-        # Create figure with two subplots side by side
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(12, 5))
-        
-        # Plot original image (using same visualization as in plot_features method)
-        ax1.imshow(img, cmap='gray', vmin=0, vmax=1.0)
-        ax1.set_title('Input Image')
-        ax1.axis('off')
         
         # Process feature activations (also for second image)
         feature_maps = sparse_features[1].detach().cpu()  # Changed index from 0 to 1
-        activation_map = feature_maps[0, :, :].numpy() #torch.mean(feature_maps, dim=0).numpy()
+        print(features.shape)
+        print(sparse_features.shape)
+        print(feature_maps.shape)
+        vals, ind = torch.topk(torch.max(feature_maps.flatten(start_dim=1, end_dim=2), dim=1).values, 10, dim=0)
+        print('Top10 values: ', vals)
+        print('Top10 indices: ', ind)
+        ind = ind.detach().cpu()
+        activation_map = feature_maps[ind[0], :, :].numpy() #torch.mean(feature_maps, dim=0).numpy()
         
+        # Process input image (taking second image from batch instead of first)
+        img = input_image[1, :, :, :].cpu().detach().numpy()  # Changed index from 0 to 1
+        
+        # Create figure with two subplots side by side
+        #fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(12, 5))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        # Plot original image (using same visualization as in plot_features method)
+        ax1.imshow(img.transpose([1,2,0]))
+        ax1.set_title('Input Image')
+        ax1.axis('off')
+
         # Normalize activation map to [0, 1] range
-        activation_map = (activation_map - activation_map.min()) / (activation_map.max() - activation_map.min() + 1e-8)
+        #activation_map = (activation_map - activation_map.min()) / (activation_map.max() - activation_map.min() + 1e-8)
         max = activation_map.max()
         min = activation_map.min()
         # Plot activation map
-        im = ax2.imshow(activation_map, cmap='viridis', vmin=0, vmax=1.0)
-        ax2.set_title('Average Feature Activation')
+        im = ax2.imshow(activation_map, cmap='viridis', vmin=min, vmax=max)
+        ax2.set_title(f'Sae neuron{ind[:4]}')
         ax2.axis('off')
         plt.colorbar(im, ax=ax2)
 
+        '''
         # Process feature activations (also for second image)
         activation_map = feature_maps[1, :, :].numpy() #torch.mean(feature_maps, dim=0).numpy()
         
@@ -134,12 +148,12 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
         im = ax4.imshow(activation_map, cmap='viridis', vmin=0, vmax=1.0)
         ax4.set_title('Average Feature Activation')
         ax4.axis('off')
-        plt.colorbar(im, ax=ax4)
+        plt.colorbar(im, ax=ax4)'''
         
-        plt.suptitle(f'SAE Activations - Epoch {epoch}')
+        plt.suptitle(f'Layer {self.layer}, Epoch {epoch}')
         
         # Save locally and to wandb
-        save_path = f'results/activations/features_epoch_{epoch}.png'
+        save_path = f'results/activations/exp_{self.folder_id}/features_epoch_{epoch}.png'
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
         wandb.log({
             "activations": wandb.Image(plt.gcf()),
@@ -151,8 +165,8 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
         """Construct and return dataloader."""
 
         transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize([224,224]),
+            #transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -172,57 +186,6 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
             drop_last=True)
         
         return dataset, data_loader  # Return both dataset and loader
-
-
-    def visualise_layers(self):
-        loop = tqdm(self.val_loader, leave=True)
-        dataset = []
-        labels = []
-        arr_pad = 0
-        for idx, data in enumerate(loop):
-            x = data["img"]
-            x = x.to(self.device)
-            features = []
-            for j in range(23):
-                features += [self.extract_features(self.models[0], x, layer_index=j)]
-                # features_flat = torch.flatten(features[-1])
-            print("features computed")
-            return data, features
-
-    def plot_features(self, data, features, spf):
-        #plt.close('all')
-        spf = spf.detach().numpy()
-        spf_ind = spf >= self.thresh
-        spf2 = np.where(spf_ind == True, spf, 0)
-        features = features.detach().numpy()
-        w_gt = data['bboxes'][0, 2]
-        h_gt = data['bboxes'][0, 3]
-        x_gt = data['bboxes'][0, 0] - w_gt / 2
-        y_gt = data['bboxes'][0, 1] - h_gt / 2
-        rect0 = patches.Rectangle((float(torch.floor(x_gt * 512)), float(torch.floor(y_gt * 256))),
-                                  float(torch.ceil(w_gt * 512)), float(torch.ceil(h_gt * 256)), linewidth=2,
-                                  edgecolor='y', facecolor='none')
-        rect1 = patches.Rectangle((float(torch.floor(x_gt * 64*2)), float(torch.floor(y_gt * 32*2))),
-                                  float(torch.ceil(w_gt * 64*2)), float(torch.ceil(h_gt * 32*2)), linewidth=2,
-                                  edgecolor='y', facecolor='none')
-        rect2 = patches.Rectangle((float(torch.floor(x_gt * 64)), float(torch.floor(y_gt * 32))),
-                                  float(torch.ceil(w_gt * 64)), float(torch.ceil(h_gt * 32)), linewidth=2,
-                                  edgecolor='y', facecolor='none')
-        fig1, ax1 = plt.subplots(1, 1)
-        #fig2, ax2 = plt.subplots(1, 1)
-        fig0, ax0 = plt.subplots(1, 1)
-
-        ax0.imshow(data['img'][0,0,:,:], cmap='gray', vmin=0, vmax=1.0)
-        ax0.add_patch(rect0)
-
-        spf = cv2.resize(spf, dsize=(features.shape[1], features.shape[0]), interpolation=cv2.INTER_NEAREST_EXACT)
-        ax1.imshow(spf, cmap='gray', vmin=0, vmax=1.5)
-        #ax1.imshow(features, cmap='gray')
-        ax1.add_patch(rect1)
-
-        #spf2 = cv2.resize(spf2, dsize=(features.shape[1], features.shape[0]), interpolation=cv2.INTER_NEAREST_EXACT)
-        #ax2.imshow(spf2, cmap='gray', vmin=0, vmax=1.0)
-        #ax2.add_patch(rect2)
 
 
     def inspect_sae(self, data=None, ref_features=[]):
@@ -278,8 +241,8 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
                 param.requires_grad = False
 
         loss_fn1 = torch.nn.MSELoss(reduction='mean')
-        lmbda = 1  # regularisation coefficient
-        rho = 0.1
+        lmbda = 0.0  # regularisation coefficient
+        rho = 0.5
         
         for epoch in range(self.epochs):
             loop = tqdm(self.val_loader, leave=True)
@@ -288,13 +251,15 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
             epoch_total_loss = 0.0
             num_batches = 0
             
-            if (epoch + 1) % 10 == 0:
-                self.optim_sae.param_groups[0]['lr'] = max(self.optim_sae.param_groups[0]['lr'] * 0.5, 1e-06)
+            if (epoch + 1) % 5 == 0:
+                self.optim_sae.param_groups[0]['lr'] = max(self.optim_sae.param_groups[0]['lr'] * 0.5, 1e-03)
+                lmbda = min(lmbda*1.5, 1.0)
+                rho = max(rho*0.5, 0.1)
                     
             for idx, (images, _) in enumerate(loop):
                 x = images
                 x = x.to(self.device)
-                features = self.extract_features(self.models[0], x, layer_index=5)
+                features = self.extract_features(self.models[0], x, layer_index=6)
 
                 print('lr: ', self.optim_sae.param_groups[0]['lr'])
                 print("Epoch: ", epoch)
@@ -302,54 +267,51 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
                 sparse_features, features_reconstruction = self.sae(features)
                 
                 # First flatten sparse features
+                '''
                 sparse_features_flat = torch.reshape(sparse_features, shape=[sparse_features.shape[0],
                                                                         sparse_features.shape[1] *
                                                                         sparse_features.shape[2] *
                                                                         sparse_features.shape[3]])
                 
                 # Then normalize
-                sparse_features_flat = torch.norm(sparse_features_flat, p=1, dim=0) / sparse_features_flat.shape[0]
-                sparse_features_flat[sparse_features_flat <= 0] = 0.0001
-                sparse_features_flat[sparse_features_flat >= 1] = 0.9999
                 
+                sparse_features_flat = torch.norm(sparse_features_flat, p=1, dim=0) / sparse_features_flat.shape[0]
+                sparse_features_flat = torch.clamp(sparse_features_flat, min=1e-03, max=(1-1e-03))
+                kl_div = - rho * torch.log(sparse_features_flat / rho) - (1 - rho) * torch.log(
+                    (1 - sparse_features_flat) / (1 - rho))
+                '''
                 # Move visualization here, after features are computed
                 if epoch % 1 == 0 and idx == 0:  # Visualize first batch every epoch
                     self.visualize_activations(features, sparse_features, x, epoch)
-                        
-                kl_div = - rho * torch.log(sparse_features_flat / rho) - (1 - rho) * torch.log(
-                    (1 - sparse_features_flat) / (1 - rho))
                 loss1 = loss_fn1(features, features_reconstruction)
-                loss2 = torch.sum(kl_div) / kl_div.shape[0]
+                #loss2 = torch.sum(kl_div) / kl_div.shape[0]
 
-                loss = loss1 + lmbda * loss2
+                loss = loss1 #+ lmbda * loss2
                 loss.backward()
                 self.optim_sae.step()
                 self.optim_sae.zero_grad()
 
                 # Update metrics
                 epoch_loss1 += loss1.item()
-                epoch_loss2 += loss2.item()
+                #epoch_loss2 += loss2.item()
                 epoch_total_loss += loss.item()
                 num_batches += 1
                 
                 # Log batch metrics
                 wandb.log({
                     "batch/reconstruction_loss": loss1.item(),
-                    "batch/sparsity_loss": loss2.item(),
+                    #"batch/sparsity_loss": loss2.item(),
                     "batch/total_loss": loss.item(),
                     "batch/learning_rate": self.optim_sae.param_groups[0]['lr']
                 })
 
-                loop.set_postfix(loss1=loss1, loss2=loss2)
-                '''spf = sparse_features / (torch.max(sparse_features_flat))
-                spf_ind = spf >= 0.4
-                spf = torch.where(spf_ind == True, spf, 0)'''
+                loop.set_postfix(loss1=loss1)#, loss2=loss2)
 
             # Log epoch metrics
             wandb.log({
                 "epoch": epoch,
                 "epoch/avg_reconstruction_loss": epoch_loss1 / num_batches,
-                "epoch/avg_sparsity_loss": epoch_loss2 / num_batches,
+                #"epoch/avg_sparsity_loss": epoch_loss2 / num_batches,
                 "epoch/avg_total_loss": epoch_total_loss / num_batches
             })
 
@@ -362,7 +324,7 @@ class sae_trainer():  # pass as argument 'trainer' when calling model.train()
             }
             
             # Save checkpoint with unique name for each epoch
-            checkpoint_path = f"{self.SAVE_SAE_MODEL_FILE}_epoch_{epoch}.pth"
+            checkpoint_path = f"{self.SAVE_SAE_MODEL_FILE}.pth"
             save_checkpoint(checkpoint, filename=checkpoint_path)
             
             # Save to wandb every 5 epochs

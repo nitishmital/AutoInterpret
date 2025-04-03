@@ -35,7 +35,7 @@ sys.path.append('./synthetic-neurons-dataset/')
 import synthetic_neurons
 import clip
 import torch.nn.functional as F
-from SAE.sae import SparseAutoencoder, SparseAutoencoder2, SparseAutoencoder3, SparseAutoencoder4, SparseAutoencoder5, SparseAutoencoder7, SparseAutoencoder8, SparseAutoencoder9
+from SAE.sae import SparseAutoencoder9, SparseAutoencoder8, SparseAutoencoder6, SparseAutoencoder7
 
 
 def save_checkpoint(state, filename="my_checkpoint.pth"):
@@ -98,8 +98,8 @@ class System:
         self.device = torch.device("cuda") #torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
         self.model_name = model_name
         self.sae_bool = sae_bool
-        self.sae = SparseAutoencoder4(input_channels=512).to(self.device)
-        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer2][2]_epoch_14'
+        self.sae = SparseAutoencoder9(input_channels=1024).to(self.device)
+        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=3][9][k_sparse]'
         load_checkpoint(torch.load(self.LOAD_SAE_MODEL_FILE + f".pth", map_location=torch.device('cpu')), self.sae)
         self.sae.to(self.device)
 
@@ -1078,7 +1078,7 @@ class DatasetExemplars():
         to the exemplar images and saving visualizations of activated regions.
     """
 
-    def __init__(self, path2exemplars, path2save, model_name, layers, units, n_exemplars = 15, im_size=224, sae_bool=False, device='cpu'):
+    def __init__(self, path2exemplars, path2save, model_name, layers, units, n_exemplars = 15, im_size=224, sae_bool=False, compute_exemplars=False, device='cpu'):
 
         """
         Constructs all the necessary attributes for the DatasetExemplars object.
@@ -1109,13 +1109,14 @@ class DatasetExemplars():
         self.units = units
         self.im_size = im_size
         self.sae_bool = sae_bool
+        self.compute_exemplars = compute_exemplars
         self.device = device
         self.exemplars = {}
         self.activations = {}
         self.thresholds = {}
         self.model = self.load_model(model_name)
-        self.sae = SparseAutoencoder4(input_channels=512).to(self.device)
-        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer2][2]_epoch_14'
+        self.sae = SparseAutoencoder9(input_channels=1024).to(self.device)
+        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=3][9][k_sparse]'
         load_checkpoint(torch.load(self.LOAD_SAE_MODEL_FILE + f".pth", map_location=torch.device('cpu')), self.sae)
         self.sae.to(self.device)
         if isinstance(self.layers, list):
@@ -1154,7 +1155,8 @@ class DatasetExemplars():
             for the specified layer. The images are Base64 encoded strings.
         """
         with torch.no_grad():
-            if not self.sae_bool:
+            if not self.compute_exemplars:
+                print('stored exemplars')
                 exp_path = f'{self.path2exemplars}/{self.model_name}/imagenet/{layer}'
                 activations = np.loadtxt(f'{exp_path}/activations.csv', delimiter=',')
                 thresholds = np.loadtxt(f'{exp_path}/thresholds.csv', delimiter=',')
@@ -1188,6 +1190,7 @@ class DatasetExemplars():
                     all_images.append(curr_image_list)
 
             else:
+                print('computing exemplars')
                 dataset_path = '/home/nmital/datadrive/AutoInterpret/maia_gemini/SAE/dataset/imagenet-mini/'
                 self.val_dataset, self.val_loader = self.get_dataloader(dataset_path, mode="test")
                 loop = tqdm(self.val_loader, leave=True)
@@ -1199,16 +1202,16 @@ class DatasetExemplars():
                     with Trace(self.model, self.layers) as ret:
                         _ = self.model(images)
                         hiddens = ret.output
-
-                    hiddens, reconstructed_feature = self.sae(hiddens.float())  #
+                    if self.sae_bool:
+                        hiddens, reconstructed_feature = self.sae(hiddens.float())  #
                     all_images = [[] for _ in range(hiddens.shape[1])]
-                    hidden_activations_on_units = hiddens[:, self.units[0], :, :]#.squeeze(1)
+                    hidden_activations_on_units = hiddens[:, self.units[0], :, :].clone() #.squeeze(1)
                     #hiddens_max_units = torch.max(hiddens.flatten(start_dim=2, end_dim=3), dim=2).values >= torch.quantile(hiddens, 0.95) # sae activations in the 95th percentile. Useful if you just want to find the neurons which activate the most.
                     hiddens_on_units = torch.max(hiddens.flatten(start_dim=2, end_dim=3), dim=2).values
                     if thresholds is None:
-                        thresholds = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.85, dim=1)
+                        thresholds = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.95, dim=1)
                     else:
-                        t = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.85, dim=1)
+                        t = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.95, dim=1)
                         thresholds = torch.where(t > thresholds, t, thresholds)
                     if idx>0:
                         hidden_activations_on_units = torch.cat((hidden_activations_on_units, exemplars_activation_maps), dim=0)
@@ -1222,8 +1225,8 @@ class DatasetExemplars():
                 print("Saving SAE exemplars")
                 activations = torch.transpose(exemplars_batch.values, 0, 1)
                 for ind in range(self.n_exemplars):
-                    save_path = os.path.join(self.path2save, 'dataset_sae_exemplars', self.model_name, layer, str(self.units[0]), 'netdisect_exemplars')
-                    masked_image = generate_masked_image(exemplars_images[ind, ...], exemplars_activation_maps[0, ...], "./temp.png", thresholds[self.units[0]])
+                    save_path = os.path.join(self.path2save, f'dataset_exemplars_sae[{self.sae_bool}]', self.model_name, layer, str(self.units[0]), 'netdisect_exemplars')
+                    masked_image = generate_masked_image(exemplars_images[ind, ...], exemplars_activation_maps[ind, ...], "./temp.png", thresholds[self.units[0]])
                     i = base64.b64decode(masked_image)
                     i = io.BytesIO(i)
                     i = mpimg.imread(i, format='PNG')
@@ -1238,8 +1241,8 @@ class DatasetExemplars():
         """Construct and return dataloader."""
 
         transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize([224,224]),
+            #transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
