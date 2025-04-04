@@ -29,7 +29,7 @@ def call_argparse():
     parser.add_argument('--maia', type=str, default='gemini-1.5-flash', choices=['gpt-4-vision-preview','gpt-4-turbo','gemini-1.5-flash'], help='maia agent name')
     parser.add_argument('--task', type=str, default='neuron_description', choices=['neuron_description'], help='task to solve, default is neuron description') #TODO: add other tasks
     parser.add_argument('--model', type=str, default='resnet152', choices=['resnet152','clip-RN50','dino_vits8','synthetic_neurons'], help='model to interp') #TODO: add synthetic neurons
-    parser.add_argument('--units', type=str2dict, default='layer3=6063', help='units to interp')
+    parser.add_argument('--units', type=str2dict, default='layer4=43558', help='units to interp')
     parser.add_argument('--unit_mode', type=str, default='manual', choices=['from_file','random','manual'], help='units to interp')	
     parser.add_argument('--unit_file_path', type=str, default='./neuron_indices/', help='units to interp')	
     parser.add_argument('--num_of_units', type=int, default=10, help='units to interp (if mode "unit_mode" is set to "random")')	
@@ -57,7 +57,7 @@ def str2dict(arg_value):
 
 # return the prompt according to the task
 def return_Prompt(prompt_path,setting='neuron_description'):
-    with open(f'{prompt_path}/api.txt', 'r') as file:
+    with open(f'{prompt_path}/api_sae.txt', 'r') as file:
         sysPrompt = file.read()
     with open(f'{prompt_path}/user_{setting}.txt', 'r') as file:
         user_prompt = file.read()
@@ -147,32 +147,6 @@ def interpretation_experiment(maia,system,tools,debug=False):
                 tools.update_experiment_log(role='execution', type="text", type_content="No 'execute_command' function was provided.")
         else:
             if "[DESCRIPTION]" in maia_experiment: return # stop the experiment if the response contains the final description. "[DESCRIPTION]" is the stopping signal.  
-            else: # if the response is not the final description, and does not contains any python code, ask maia to provide more information
-                tools.update_experiment_log(role='execution', type="text", type_content="No code to run was provided, please continue with the experiments based on your findings.")
-
-def interpretation_experiment2(maia,system,tools,debug=False):
-    round_count = 0
-    while True:
-        round_count+=1
-        maia_experiment = ask_agent(maia,tools.experiment_log) # ask maia for the next experiment given the results log to the experiment log (in the first round, the experiment log contains only the system prompt (maia api) and the user prompt (the query))
-        tools.update_experiment_log(role='maia', type="text", type_content=str(maia_experiment)) # update the experiment log with maia's response (str casting is for exceptions)
-        tools.generate_html() # generate the html file to visualize the experiment log
-        if debug: # print the dialogue to the screen
-            print(maia_experiment)
-        if round_count>25: # if the interpretation process exceeds 25 rounds, ask the agent to provide final description
-            overload_instructions()
-        elif "```python" in maia_experiment: # if the response contains python code, execute the code
-            maia_code = get_code(maia_experiment)
-            if "execute_command" in maia_code:
-                try:
-                    execute_maia_experiment(maia_code,system,tools) # execute the code fro maia, code itself should contain the tools.update_experiment_log(...) to update the experiment log with the execution results
-                except Exception as e:
-                    tools.update_experiment_log(role='execution', type="text", type_content=f"Error while executing 'execute_command':\n{str(e)}")
-                tools.generate_html()
-            else:
-                tools.update_experiment_log(role='execution', type="text", type_content="No 'execute_command' function was provided.")
-        else:
-            if "[DESCRIPTION]" in maia_experiment: return # stop the experiment if the response contains the final description. "[DESCRIPTION]" is the stopping signal.
             else: # if the response is not the final description, and does not contains any python code, ask maia to provide more information
                 tools.update_experiment_log(role='execution', type="text", type_content="No code to run was provided, please continue with the experiments based on your findings.")
 

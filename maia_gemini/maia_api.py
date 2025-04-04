@@ -98,8 +98,8 @@ class System:
         self.device = torch.device("cuda") #torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
         self.model_name = model_name
         self.sae_bool = sae_bool
-        self.sae = SparseAutoencoder9(input_channels=1024).to(self.device)
-        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=3][9][k_sparse]'
+        self.sae = SparseAutoencoder8(input_channels=2048).to(self.device)
+        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=4][8][k_sparse]'
         load_checkpoint(torch.load(self.LOAD_SAE_MODEL_FILE + f".pth", map_location=torch.device('cpu')), self.sae)
         self.sae.to(self.device)
 
@@ -281,6 +281,7 @@ class System:
         """
         activation_list = []
         masked_images_list = []
+        input_image_list = []
         for image in image_list:
             if  image==None: #for dalle
                 activation_list.append(None)
@@ -291,14 +292,18 @@ class System:
                     acts, image_class = self.calc_class(tensor)    
                     activation_list.append(torch.round(acts[ind] * 100).item()/100)
                     masked_images_list.append(image2str(image[0]))
+                    input_image_list.append(img2str(image[0]))
                 else:
                     image = self.preprocess_images(image)
                     acts,masks = self.calc_activations(image)    
                     ind = torch.argmax(acts).item()
                     masked_image = generate_masked_image(image[ind], masks[ind], "./temp.png", self.threshold)
+                    input_image = generate_masked_image(image[ind], torch.ones_like(masks[ind]), "./temp.png", torch.zeros_like(self.threshold))
                     activation_list.append(torch.round(acts[ind] * 100).item()/100)   
                     masked_images_list.append(masked_image)
-        return activation_list,masked_images_list
+                    input_image_list.append(input_image)
+
+        return activation_list, input_image_list, masked_images_list
     
     def preprocess_imagenet(self, image, normalize=True, im_size=224):
         
@@ -477,6 +482,7 @@ class Tools:
         self.im_size = 224
         if DatasetExemplars is not None:
             self.exemplars = DatasetExemplars.exemplars
+            self.masked_exemplars = DatasetExemplars.masked_exemplars  
             self.exemplars_activations = DatasetExemplars.activations
             self.exempalrs_thresholds = DatasetExemplars.thresholds
         self.activation_threshold = 0
@@ -573,7 +579,7 @@ class Tools:
                 all_images.append([edited_images[i//2]])
         return all_images, all_prompt
     
-    def save_experiment_log(self, activation_list: List[int], image_list: List[str], image_titles: List[str], image_textual_information: List[str] = None):
+    def save_experiment_log(self, activation_list: List[int], image_list: List[str], masked_image_list: List[str], image_titles: List[str], image_textual_information: List[str] = None):
         """documents the current experiment results as an entry in the experiment log list. if self.activation_threshold was updated by net_dissect function, 
         the experiment log will contains instruction to continue with experiments if activations are lower than activation_threshold.
         Results that are loged will be available for future experiment (unlogged results will be unavailable).
@@ -648,7 +654,8 @@ class Tools:
             output.append({"type": "text", "text": f'"{image_titles[ind]}", activation: {act}\nimage: \n'})
             #output.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_list[ind]}})
             output.append({"type": "image_url", "image_url": image_list[ind]})
-            self.results_list.append({image_titles[ind]: {"activation": act, "image": image_list[ind]}})
+            output.append({"type": "image_url", "image_url": masked_image_list[ind]})
+            self.results_list.append({image_titles[ind]: {"activation": act, "image": image_list[ind], "masked_image": masked_image_list[ind]}})
         if (self.activation_threshold != 0) and (max(activation_list) < self.activation_threshold):
             output.append({"type": "text", "text":f"\nMax activation is smaller than {(self.activation_threshold * 100).round()/100}, please continue with the experiments.\n"})
         if image_textual_information != None:
@@ -688,10 +695,12 @@ class Tools:
         Returns
         -------
         tuple
-            A tuple containing two elements:
+            A tuple containing three elements:
             - The first element is a list of activation values for the specified neuron.
             - The second element is a list of exemplar images (as Base64 encoded strings or 
             in the format they were stored) corresponding to these activations.
+            - The third element is a list of masked exemplar images (as Base64 encoded strings or 
+            in the format they were stored) masked with the activations.
 
         Example
         -------
@@ -703,10 +712,11 @@ class Tools:
         >>> save_experiment_log(prompt_list, activation_list, image_list, self.activation_threshold)
         """
         image_list = self.exemplars[system.layer][system.neuron_num]
+        masked_image_list = self.masked_exemplars[system.layer][system.neuron_num]
         activation_list = self.exemplars_activations[system.layer][system.neuron_num]
         self.activation_threshold = sum(activation_list)/len(activation_list)
         activation_list = (activation_list * 100).round()/100 
-        return activation_list, image_list
+        return activation_list, image_list, masked_image_list
 
     def neuron_exemplars(self, system):
         """
@@ -1112,22 +1122,25 @@ class DatasetExemplars():
         self.compute_exemplars = compute_exemplars
         self.device = device
         self.exemplars = {}
+        self.masked_exemplars = {}
         self.activations = {}
         self.thresholds = {}
         self.model = self.load_model(model_name)
-        self.sae = SparseAutoencoder9(input_channels=1024).to(self.device)
-        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=3][9][k_sparse]'
+        self.sae = SparseAutoencoder8(input_channels=2048).to(self.device)
+        self.LOAD_SAE_MODEL_FILE = '/home/nmital/datadrive/AutoInterpret/maia_gemini/results/trained_models/SAE_on[resnet152][layer=4][8][k_sparse]'
         load_checkpoint(torch.load(self.LOAD_SAE_MODEL_FILE + f".pth", map_location=torch.device('cpu')), self.sae)
         self.sae.to(self.device)
         if isinstance(self.layers, list):
             for layer in self.layers: 
-                exemplars, activations, thresholds = self.net_dissect(layer)
+                exemplars, masked_exemplars, activations, thresholds = self.net_dissect(layer)
                 self.exemplars[layer] = exemplars
+                self.masked_exemplars[layer] = masked_exemplars
                 self.activations[layer] = activations
                 self.thresholds[layer] = thresholds
         else:
-            exemplars, activations, thresholds = self.net_dissect(self.layers)
+            exemplars, masked_exemplars, activations, thresholds = self.net_dissect(self.layers)
             self.exemplars[self.layers] = exemplars
+            self.masked_exemplars[self.layers] = masked_exemplars
             self.activations[self.layers] = activations
             self.thresholds[self.layers] = thresholds
 
@@ -1163,6 +1176,7 @@ class DatasetExemplars():
                 image_array = np.load(f'{exp_path}/images.npy')
                 mask_array = np.load(f'{exp_path}/masks.npy')
                 all_images = []
+                all_masked_images = []
                 for unit in range(activations.shape[0]):
                     curr_image_list = []
                     if self.units!=None and not(unit in self.units):
@@ -1180,6 +1194,14 @@ class DatasetExemplars():
                             inside = np.array(curr_mask>0)
                             outside = np.array(curr_mask==0)
                             masked_image = curr_image * inside + 0.25 * curr_image * outside
+                            ''' Original input image '''
+                            input_image =  Image.fromarray(np.transpose(curr_image, (1, 2, 0)).astype(np.uint8))
+                            input_image = input_image.resize([self.im_size, self.im_size], Image.Resampling.LANCZOS)
+                            os.makedirs(save_path,exist_ok=True)
+                            input_image.save(os.path.join(save_path,f'orig_{exemplar_inx}.png'), format='PNG')
+                            with open(os.path.join(save_path,f'orig_{exemplar_inx}.png'), "rb") as image_file:
+                                input_image = base64.b64encode(image_file.read()).decode('utf-8')
+                            ''' Masked image '''
                             masked_image =  Image.fromarray(np.transpose(masked_image, (1, 2, 0)).astype(np.uint8))
                             masked_image = masked_image.resize([self.im_size, self.im_size], Image.Resampling.LANCZOS)
                             os.makedirs(save_path,exist_ok=True)
@@ -1187,7 +1209,9 @@ class DatasetExemplars():
                             with open(os.path.join(save_path,f'{exemplar_inx}.png'), "rb") as image_file:
                                 masked_image = base64.b64encode(image_file.read()).decode('utf-8')
                             curr_image_list.append(masked_image)
-                    all_images.append(curr_image_list)
+                            input_image_list.append(input_image)
+                    all_images.append(input_image_list)
+                    all_masked_images.append(curr_image_list)
 
             else:
                 print('computing exemplars')
@@ -1205,13 +1229,14 @@ class DatasetExemplars():
                     if self.sae_bool:
                         hiddens, reconstructed_feature = self.sae(hiddens.float())  #
                     all_images = [[] for _ in range(hiddens.shape[1])]
+                    all_masked_images = [[] for _ in range(hiddens.shape[1])]
                     hidden_activations_on_units = hiddens[:, self.units[0], :, :].clone() #.squeeze(1)
                     #hiddens_max_units = torch.max(hiddens.flatten(start_dim=2, end_dim=3), dim=2).values >= torch.quantile(hiddens, 0.95) # sae activations in the 95th percentile. Useful if you just want to find the neurons which activate the most.
                     hiddens_on_units = torch.max(hiddens.flatten(start_dim=2, end_dim=3), dim=2).values
                     if thresholds is None:
-                        thresholds = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.95, dim=1)
+                        thresholds = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.85, dim=1)
                     else:
-                        t = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.95, dim=1)
+                        t = torch.quantile(hiddens.permute(1,0,2,3).flatten(start_dim=1, end_dim=3), 0.85, dim=1)
                         thresholds = torch.where(t > thresholds, t, thresholds)
                     if idx>0:
                         hidden_activations_on_units = torch.cat((hidden_activations_on_units, exemplars_activation_maps), dim=0)
@@ -1227,15 +1252,25 @@ class DatasetExemplars():
                 for ind in range(self.n_exemplars):
                     save_path = os.path.join(self.path2save, f'dataset_exemplars_sae[{self.sae_bool}]', self.model_name, layer, str(self.units[0]), 'netdisect_exemplars')
                     masked_image = generate_masked_image(exemplars_images[ind, ...], exemplars_activation_maps[ind, ...], "./temp.png", thresholds[self.units[0]])
+                    ''' Original input images '''
+                    input_image = generate_masked_image(exemplars_images[ind, ...], torch.ones_like(exemplars_activation_maps[ind, ...]), "./temp.png", torch.zeros_like(thresholds[self.units[0]]))
+                    i = base64.b64decode(input_image)
+                    i = io.BytesIO(i)
+                    i = mpimg.imread(i, format='PNG')
+                    os.makedirs(save_path, exist_ok=True)
+                    im = Image.fromarray((i*255).astype(np.uint8))
+                    im.save(os.path.join(save_path, f'orig_{ind}.png'))
+                    all_images[self.units[0]].append(input_image)
+                    ''' Masked_image '''
                     i = base64.b64decode(masked_image)
                     i = io.BytesIO(i)
                     i = mpimg.imread(i, format='PNG')
                     os.makedirs(save_path, exist_ok=True)
                     im = Image.fromarray((i*255).astype(np.uint8))
                     im.save(os.path.join(save_path, f'{ind}.png'))
-                    all_images[self.units[0]].append(masked_image)
+                    all_masked_images[self.units[0]].append(masked_image)
 
-        return all_images,activations[:,:self.n_exemplars],thresholds
+        return all_images,all_masked_images,activations[:,:self.n_exemplars],thresholds
     
     def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
         """Construct and return dataloader."""
